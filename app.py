@@ -351,6 +351,7 @@ class report_screen(screen):
             bg=PANEL,
             highlightthickness=0,
         )
+        self._last_sections = None
 
     def add_btn(
         self,
@@ -378,6 +379,13 @@ class report_screen(screen):
         return b
 
     def set_sections(self, sections, reset=False):
+        # during a live scan, most 1s ticks arrive with identical content
+        # (still "waiting for DHCP...", still "listening..."); rebuilding
+        # every widget in the scroll area for no visual change is what was
+        # causing the flicker - skip the rebuild when nothing changed
+        if not reset and sections == self._last_sections:
+            return
+        self._last_sections = sections
         render_sections(self.scroll, sections, reset)
 
     def set_banner(self, text, status=""):
