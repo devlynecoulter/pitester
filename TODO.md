@@ -1,5 +1,20 @@
 # Pi Cable Tester - TODO
 
+## Recently done
+- Full style/robustness pass on app.py, netcore.py, storage.py (readable
+  formatting, no lambdas, verb-first naming, snake_case classes).
+- SSDP/UPnP discovery merged into netcore.py (was standalone ssdp_probe.py,
+  now archived in old/). Not yet wired into the scan flow or a device list
+  screen - see item 1 below.
+- preflight.py: two-tier self-diagnostic (safe read-only checks that run
+  automatically on the new SYSTEM > SELF TEST screen, plus a confirm-gated
+  active tier that exercises the link/AP for real). run_safe_checks() also
+  hardened run() and query_dns() against a couple of real edge cases found
+  along the way (non-UTF8 tool output, an unbounded receive loop).
+- Fixed report-screen flicker during live scans (was rebuilding every
+  widget on every 1s tick even when nothing changed).
+- Repo is live at github.com/devlynecoulter/pitester (private).
+
 ## 0. Groundwork (do first, the rest depends on it)
 - [ ] Make netcore take an interface argument instead of the global `IFACE`,
       so every test can run on eth0 OR wlan0.
@@ -17,12 +32,9 @@
       8008/8009 (Chromecast) + AV/control ports from the job's gear.
 - [ ] Name/ID layer: MAC vendor, reverse DNS, mDNS/Bonjour, SSDP/UPnP,
       NetBIOS, HTTP page title.
-      - [ ] SSDP/UPnP is already written standalone in ssdp_probe.py
-            (M-SEARCH + passive NOTIFY listen + parallel description
-            fetch, stdlib only). To merge into netcore.py: drop its
-            iface_ip() in favor of netcore's own ip_info(), fold
-            ssdp_discover() in as another scan step, and surface its
-            sections on the device list screen above.
+      - [x] SSDP/UPnP: discover_ssdp() lives in netcore.py now (see
+            "Recently done"). Still need: a scan step or button that calls
+            it, and somewhere in the UI to show what it finds.
 - [ ] Results: device list screen (IP, MAC, vendor, name, open ports),
       saved to CSV like the other tests.
 - [ ] Also from earlier list:
