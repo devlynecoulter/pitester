@@ -1,0 +1,61 @@
+#!/bin/bash
+# pitester-ap: control the tester's Wi-Fi access point (PAU06).
+#   isolate - block forwarding to/from AP clients (SSH/SFTP to the Pi still works)
+#   open    - allow AP clients through to other networks ("window" mode)
+#   status  - key=value summary
+# The adapter is found by MAC, so it doesn't matter if it enumerates as wlan0 or wlan1.
+set -u
+CONF=/etc/pitester/ap.conf
+[ -r "$CONF" ] && . "$CONF"
+AP_MAC="${AP_MAC:-}"
+AP_CON="${AP_CON:-scanner-ap}"
+TABLE="pitester_ap"
+
+find_iface() {
+    local d
+    for d in /sys/class/net/*; do
+        if [ "$(cat "$d/address" 2>/dev/null)" = "$AP_MAC" ]; then basename "$d"; return 0; fi
+    done
+    return 1
+}
+wait_iface() {
+    local i
+    for i in $(seq 1 30); do find_iface && return 0; sleep 1; done
+    return 1
+}
+
+case "${1:-status}" in
+    isolate)
+        IF=$(wait_iface) || { echo "AP adapter ($AP_MAC) not found" >&2; exit 1; }
+        nft delete table inet "$TABLE" 2>/dev/null
+        nft -f - <<EOF
+table inet $TABLE {
+    chain forward {
+        type filter hook forward priority -10; policy accept;
+        iifname "$IF" drop
+        oifname "$IF" drop
+    }
+}
+EOF
+        echo "mode=isolated"
+        ;;
+    open)
+        nft delete table inet "$TABLE" 2>/dev/null
+        echo "mode=open"
+        ;;
+    status)
+        IF=$(find_iface || true)
+        echo "iface=${IF:-missing}"
+        if nft list table inet "$TABLE" >/dev/null 2>&1; then echo "mode=isolated"; else echo "mode=open"; fi
+        echo "ssid=$(nmcli -g 802-11-wireless.ssid connection show "$AP_CON" 2>/dev/null)"
+        if [ -n "$IF" ]; then
+            echo "state=$(nmcli -g GENERAL.STATE device show "$IF" 2>/dev/null)"
+            echo "ip=$(nmcli -g IP4.ADDRESS device show "$IF" 2>/dev/null | head -1)"
+            L="/var/lib/NetworkManager/dnsmasq-$IF.leases"
+            n=0; [ -r "$L" ] && n=$(grep -c . "$L" || true)
+            echo "clients=${n:-0}"
+        fi
+        ;;
+    *)
+        echo "usage: $0 isolate|open|status" >&2; exit 2 ;;
+esac
