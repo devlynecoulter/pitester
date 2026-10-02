@@ -109,6 +109,7 @@ paths() { for d in /usr/sbin /usr/bin /sbin /bin; do [ -x "$d/$1" ] && echo "$d/
 CMDS=()
 for p in $(paths ethtool); do CMDS+=("$p"); done
 for p in $(paths lldpcli); do CMDS+=("$p"); done
+for p in $(paths nmcli); do CMDS+=("$p"); done   # CONNECTIONS screens, if polkit says no
 for p in $(paths systemctl); do CMDS+=("$p poweroff" "$p reboot" "$p restart lldpd"); done
 CMDS+=("/usr/local/sbin/pitester-ap")
 LINE="$USER_NAME ALL=(root) NOPASSWD: $(printf '%s, ' "${CMDS[@]}")"

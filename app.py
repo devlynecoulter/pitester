@@ -201,6 +201,114 @@ class touch_scroll(tk.Frame):
             self.canvas.yview_moveto(0)
 
 
+class touch_keyboard(tk.Frame):
+    """Full-screen on-screen keyboard, laid over everything (status bar too).
+
+    ask() shows it; OK hands the text to on_ok, CANCEL just hides it.
+    mode "ip" is a big number pad for addresses (digits . / ,).
+    """
+
+    LETTERS = ["1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm-_."]
+    SYMBOLS = ["1234567890", "!@#$%^&*()", "-_=+[]{}\\|", ";:'\",.<>/?`~"]
+    NUMPAD = ["123", "456", "789", ".0/,"]
+
+    def __init__(self, parent):
+        super().__init__(parent, bg=BG)
+        self.mode, self.layout, self.shift = "text", "letters", False
+        self.text, self.on_ok = "", None
+        self.title_lbl = tk.Label(
+            self,
+            font=F_SMALL,
+            fg=DIM,
+            bg=BG,
+            anchor="w",
+        )
+        self.title_lbl.pack(fill="x", padx=8, pady=(4, 0))
+        self.entry_lbl = tk.Label(
+            self,
+            font=F_BIG,
+            fg=FG,
+            bg=PANEL,
+            anchor="w",
+            padx=8,
+        )
+        self.entry_lbl.pack(fill="x", padx=6, pady=(0, 4))
+        self.keys = tk.Frame(self, bg=BG)
+        self.keys.pack(fill="both", expand=True, padx=3, pady=(0, 3))
+
+    def ask(self, title, initial, on_ok, mode="text"):
+        self.mode, self.layout, self.shift = mode, "letters", False
+        self.text, self.on_ok = initial, on_ok
+        self.title_lbl.config(text=title)
+        self._draw_keys()
+        self._draw_text()
+        self.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self.lift()
+
+    def hide(self):
+        self.place_forget()
+
+    def _draw_text(self):
+        # only the tail is shown so the cursor end of a long password stays visible
+        shown = self.text if len(self.text) <= 30 else "..." + self.text[-29:]
+        self.entry_lbl.config(text=shown + "_")
+
+    def _draw_keys(self):
+        for c in self.keys.winfo_children():
+            c.destroy()
+        if self.mode == "ip":
+            rows = self.NUMPAD
+        elif self.layout == "symbols":
+            rows = self.SYMBOLS
+        else:
+            rows = [r.upper() for r in self.LETTERS] if self.shift else self.LETTERS
+        for chars in rows:
+            row = tk.Frame(self.keys, bg=BG)
+            row.pack(fill="both", expand=True)
+            for ch in chars:
+                key_btn = mkbtn(row, ch, functools.partial(self._type, ch))
+                key_btn.pack(side="left", fill="both", expand=True, padx=2, pady=2)
+
+        bar = tk.Frame(self.keys, bg=BG)
+        bar.pack(fill="both", expand=True)
+        actions = [("CANCEL", self.hide, PANEL2)]
+        if self.mode != "ip":
+            actions += [
+                ("SHIFT", self._toggle_shift, ACCENT if self.shift else PANEL2),
+                ("abc" if self.layout == "symbols" else "#+=", self._toggle_symbols, PANEL2),
+                ("SPACE", self._space, PANEL2),
+            ]
+        actions += [("DEL", self._delete, PANEL2), ("OK", self._ok, GREEN)]
+        for text, cmd, bg in actions:
+            action_btn = mkbtn(bar, text, cmd, bg=bg, font=F_BOLD)
+            action_btn.pack(side="left", fill="both", expand=True, padx=2, pady=2)
+
+    def _type(self, ch):
+        self.text += ch
+        self._draw_text()
+
+    def _space(self):
+        self._type(" ")
+
+    def _delete(self):
+        self.text = self.text[:-1]
+        self._draw_text()
+
+    def _toggle_shift(self):
+        self.shift = not self.shift
+        self.layout = "letters"
+        self._draw_keys()
+
+    def _toggle_symbols(self):
+        self.layout = "letters" if self.layout == "symbols" else "symbols"
+        self._draw_keys()
+
+    def _ok(self):
+        self.hide()
+        if self.on_ok:
+            self.on_ok(self.text)
+
+
 def render_sections(scroll, sections, reset=False):
     """Draw a list of (title, [(field, value, status), ...]) as stacked panels.
 
@@ -480,8 +588,8 @@ def build_menus(parent, app):
             ("LOGS", go("logs")),
         ], cols=2),
         "connections": menu_screen(parent, app, [
-            ("WI-FI\nCONFIG", None),
-            ("ETH\nCONFIG", None),
+            ("WI-FI\nCONFIG", go("wifi")),
+            ("ETH\nCONFIG", go("ethcfg")),
             None,
             None,
             None,
@@ -670,6 +778,288 @@ class blink_screen(report_screen):
     def on_done(self):
         self.is_running = False
         self.run_btn.config(text="START", bg=ACCENT)
+
+
+class wifi_screen(report_screen):
+    """Networks seen by the built-in radio; tap one to join it. A secured
+    network asks for its password unless it's already saved, or the last
+    try with the saved one failed (then it asks again)."""
+
+    def __init__(self, parent, app):
+        super().__init__(parent, app, "WI-FI")
+        self.iface, self.saved, self.retry = None, set(), set()
+        self.add_btn("BACK", self._go_back)
+        self.add_btn("RESCAN", self._rescan, bg=ACCENT)
+        self.add_btn("DISCONNECT", self._disconnect, confirm=True, font=F_BOLD)
+        self.add_btn("SETTINGS", self._go_settings, font=F_BOLD)
+        self.set_sections([("WI-FI", [("Status", "scanning...", "")])])
+
+    def on_show(self):
+        self._rescan()
+
+    def _scan_and_emit(self, emit):
+        iface = nc.wifi_iface()
+        nets, err = nc.wifi_scan(iface) if iface else (None, "no built-in Wi-Fi adapter found")
+        emit(iface=iface, nets=nets or [], err=err, saved=nc.saved_wifi())
+
+    def _rescan(self):
+        self.info_lbl.config(text="scanning...")
+
+        def fn(emit, stop):
+            self._scan_and_emit(emit)
+        self.app.run_task("wifi", fn)
+
+    def _tap(self, net, _e=None):
+        if self.scroll.dragged:
+            return
+        ssid = net["ssid"]
+        if net["security"] and (ssid not in self.saved or ssid in self.retry):
+            self.app.keyboard.ask(f"Password for {ssid}", "", functools.partial(self._connect, ssid))
+        else:
+            self._connect(ssid, None)
+
+    def _connect(self, ssid, password):
+        if not self.iface:
+            return
+        iface = self.iface
+        self.info_lbl.config(text=f"connecting to {ssid}...")
+
+        def fn(emit, stop):
+            ok, msg = nc.wifi_connect(iface, ssid, password)
+            emit(toast=f"{ssid}: {msg}", ok=ok, ssid=ssid)
+            self._scan_and_emit(emit)
+        self.app.run_task("wifi", fn)
+
+    def _disconnect(self):
+        if not self.iface:
+            return
+        iface = self.iface
+        self.info_lbl.config(text="disconnecting...")
+
+        def fn(emit, stop):
+            ok, msg = nc.wifi_disconnect(iface)
+            emit(toast=msg, ok=ok)
+            self._scan_and_emit(emit)
+        self.app.run_task("wifi", fn)
+
+    def _go_settings(self):
+        self.app.show("wificfg")
+
+    def on_msg(self, kw):
+        if "toast" in kw:
+            self.app.toast(kw["toast"], GREEN if kw["ok"] else RED, ms=4000)
+            if "ssid" in kw:
+                if kw["ok"]:
+                    self.retry.discard(kw["ssid"])
+                else:
+                    self.retry.add(kw["ssid"])
+        if "nets" in kw:
+            self.iface, self.saved = kw["iface"], kw["saved"]
+            self.info_lbl.config(text=f"{self.iface or 'no adapter'}  {time.strftime('%H:%M:%S')}")
+            self._draw(kw["nets"], kw["err"])
+
+    def _draw(self, nets, err):
+        self.scroll.clear()
+        self._last_sections = None
+        if err:
+            err_lbl = tk.Label(
+                self.scroll.inner,
+                text=err,
+                font=F_BODY,
+                fg=RED,
+                bg=BG,
+                wraplength=600,
+            )
+            err_lbl.pack(pady=30)
+        elif not nets:
+            empty_lbl = tk.Label(
+                self.scroll.inner,
+                text="No networks found - tap RESCAN",
+                font=F_BODY,
+                fg=DIM,
+                bg=BG,
+            )
+            empty_lbl.pack(pady=40)
+
+        for n in nets:
+            row = tk.Frame(self.scroll.inner, bg=PANEL)
+            row.pack(fill="x", padx=6, pady=3)
+            name_lbl = tk.Label(
+                row,
+                text=n["ssid"] + ("   CONNECTED" if n["in_use"] else ""),
+                font=F_BOLD,
+                fg=GREEN if n["in_use"] else FG,
+                bg=PANEL,
+                anchor="w",
+            )
+            name_lbl.pack(fill="x", padx=8, pady=(6, 0))
+            detail = f"{n['signal']}%   ch {n['chan']}   {n['security'] or 'open'}"
+            if n["ssid"] in self.saved:
+                detail += "   saved"
+            detail_lbl = tk.Label(
+                row,
+                text=detail,
+                font=F_SMALL,
+                fg=DIM,
+                bg=PANEL,
+                anchor="w",
+            )
+            detail_lbl.pack(fill="x", padx=8, pady=(0, 6))
+            for w in (row, *row.winfo_children()):
+                w.bind("<ButtonRelease-1>", functools.partial(self._tap, n))
+        self.scroll.bind_children()
+
+
+class adapter_screen(report_screen):
+    """The most-used adapter settings, as tap-to-change rows: IPv4 mode,
+    static address / gateway / DNS, link speed (Ethernet only) and MTU.
+    kind "eth" edits eth0's pitester-eth profile; kind "wifi" edits the
+    network the built-in radio is on. Nothing changes until APPLY; DEFAULTS
+    only refills the form (DHCP, auto link, auto MTU) for you to APPLY.
+    """
+
+    LINKS = ["auto", "1000/full", "100/full", "100/half", "10/full", "10/half"]
+    MTUS = ["auto", "1500", "1492", "1400", "9000"]
+    STATIC_FIELDS = ("address", "gateway", "dns")
+
+    def __init__(self, parent, app, name, kind, title):
+        super().__init__(parent, app, title)
+        self.name, self.kind = name, kind
+        self.iface, self.con = None, None
+        self.s = dict(nc.ADAPTER_DEFAULTS)
+        self.add_btn("BACK", self._go_back)
+        self.add_btn("DEFAULTS", self._defaults)
+        self.apply_btn = self.add_btn("APPLY", self._apply, bg=ACCENT)
+
+    def on_show(self):
+        self.info_lbl.config(text="reading...")
+        self.set_banner("")
+        kind = self.kind
+
+        def fn(emit, stop):
+            iface = nc.IFACE if kind == "eth" else nc.wifi_iface()
+            con, s = nc.read_adapter(kind, iface) if iface else (None, dict(nc.ADAPTER_DEFAULTS))
+            emit(iface=iface, con=con, s=s)
+        self.app.run_task(self.name, fn)
+
+    def _rows(self):
+        rows = [("IPv4", "method"), ("Address", "address"), ("Gateway", "gateway"), ("DNS", "dns")]
+        if self.kind == "eth":
+            rows.append(("Link", "link"))
+        rows.append(("MTU", "mtu"))
+        return rows
+
+    def _value_text(self, key):
+        v = self.s[key]
+        if key == "method":
+            return {"auto": "DHCP", "manual": "STATIC"}.get(v, v.upper())
+        if key in self.STATIC_FIELDS:
+            return v or "(none)"
+        return v.replace("/", " ").upper()
+
+    def _draw(self):
+        self.scroll.clear()
+        self._last_sections = None
+        if not self.con:
+            msg = "No adapter found" if not self.iface else "Not connected - join a network first"
+            none_lbl = tk.Label(self.scroll.inner, text=msg, font=F_BODY, fg=DIM, bg=BG)
+            none_lbl.pack(pady=40)
+            self.apply_btn.config(state="disabled")
+            return
+
+        self.apply_btn.config(state="normal")
+        for label, key in self._rows():
+            locked = key in self.STATIC_FIELDS and self.s["method"] != "manual"
+            row = tk.Frame(self.scroll.inner, bg=PANEL)
+            row.pack(fill="x", padx=6, pady=3)
+            field_lbl = tk.Label(
+                row,
+                text=label,
+                font=F_BODY,
+                fg=DIM,
+                bg=PANEL,
+                anchor="w",
+                width=10,
+            )
+            field_lbl.pack(side="left", padx=8, pady=6)
+            value_lbl = tk.Label(
+                row,
+                text="(from DHCP)" if locked else self._value_text(key),
+                font=F_BOLD,
+                fg=DIM if locked else FG,
+                bg=PANEL,
+                anchor="w",
+            )
+            value_lbl.pack(side="left", fill="x", expand=True)
+            if not locked:
+                for w in (row, field_lbl, value_lbl):
+                    w.bind("<ButtonRelease-1>", functools.partial(self._edit, key))
+        self.scroll.bind_children()
+
+    def _edit(self, key, _e=None):
+        if self.scroll.dragged:
+            return
+        if key == "method":
+            self.s["method"] = "manual" if self.s["method"] == "auto" else "auto"
+        elif key == "link":
+            self.s["link"] = self.LINKS[(self.LINKS.index(self.s["link"]) + 1) % len(self.LINKS)] \
+                if self.s["link"] in self.LINKS else "auto"
+        elif key == "mtu":
+            self.s["mtu"] = self.MTUS[(self.MTUS.index(self.s["mtu"]) + 1) % len(self.MTUS)] \
+                if self.s["mtu"] in self.MTUS else "auto"
+        else:
+            title = {"address": "Address (e.g. 192.168.1.50/24)", "gateway": "Gateway",
+                     "dns": "DNS servers (comma between them)"}[key]
+            self.app.keyboard.ask(title, self.s[key], functools.partial(self._set_text, key), mode="ip")
+            return
+        self._changed()
+
+    def _set_text(self, key, text):
+        value, err = nc.clean_ipv4(key, text)
+        if err:
+            self.app.toast(f"Not a valid address: {err}", RED, ms=4000)
+            return
+        self.s[key] = value
+        self._changed()
+
+    def _changed(self):
+        self.set_banner("NOT APPLIED YET", nc.WARN)
+        self._draw()
+
+    def _defaults(self):
+        self.s = dict(nc.ADAPTER_DEFAULTS)
+        self._changed()
+
+    def _apply(self):
+        if not self.con:
+            return
+        self.info_lbl.config(text="applying...")
+        self.apply_btn.config(state="disabled")
+        kind, iface, s = self.kind, self.iface, dict(self.s)
+
+        def fn(emit, stop):
+            ok, msg = nc.apply_adapter(kind, iface, s)
+            emit(toast=msg, ok=ok)
+            if ok:  # on failure keep the form as typed so it can be fixed
+                con, s2 = nc.read_adapter(kind, iface)
+                emit(iface=iface, con=con, s=s2)
+        self.app.run_task(self.name, fn)
+
+    def on_msg(self, kw):
+        if "toast" in kw:
+            self.app.toast(kw["toast"], GREEN if kw["ok"] else RED, ms=4000)
+            if kw["ok"]:
+                self.set_banner("")
+                if self.kind == "eth":
+                    self.app.after(4000, self.app._rescan_if_idle)
+        if "s" in kw:
+            self.iface, self.con, self.s = kw["iface"], kw["con"], kw["s"]
+            self.info_lbl.config(text=f"{self.iface or '?'}  {self.con or ''}")
+            self._draw()
+
+    def on_done(self):
+        if self.con:
+            self.apply_btn.config(state="normal")
 
 
 class load_screen(screen):
@@ -934,6 +1324,9 @@ class app(tk.Tk):
         "system": "system",
         "selftest_safe": "selftest",
         "selftest_active": "selftest",
+        "wifi": "wifi",
+        "ethcfg": "ethcfg",
+        "wificfg": "wificfg",
     }
     LINK_DISRUPTING = {"cable", "blink", "selftest_active"}
     # where BACK goes from each screen; anything not listed goes to home
@@ -945,6 +1338,9 @@ class app(tk.Tk):
         "load": "logs",
         "viewer": "load",
         "selftest": "system",
+        "wifi": "connections",
+        "ethcfg": "connections",
+        "wificfg": "wifi",
     }
 
     def __init__(self):
@@ -1000,6 +1396,7 @@ class app(tk.Tk):
             ("viewer", viewer_screen),
             ("system", system_screen),
             ("selftest", self_test_screen),
+            ("wifi", wifi_screen),
         ]
         for name, cls in screen_classes:
             s = cls(body, self)
@@ -1010,6 +1407,20 @@ class app(tk.Tk):
                 relheight=1,
             )
             self.screens[name] = s
+        adapter_screens = [
+            ("ethcfg", "eth", "ETHERNET SETTINGS"),
+            ("wificfg", "wifi", "WI-FI SETTINGS"),
+        ]
+        for name, kind, title in adapter_screens:
+            s = adapter_screen(body, self, name, kind, title)
+            s.place(
+                relx=0,
+                rely=0,
+                relwidth=1,
+                relheight=1,
+            )
+            self.screens[name] = s
+        self.keyboard = touch_keyboard(self)
         self.toast_lbl = tk.Label(
             self,
             font=F_BOLD,

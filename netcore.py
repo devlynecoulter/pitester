@@ -6,6 +6,7 @@ this module unchanged. Every test produces "sections":
     [(section_title, [(field, value, status), ...]), ...]
 which the UI renders and storage.py writes to CSV.
 """
+import ipaddress
 import json
 import os
 import random
@@ -1041,6 +1042,204 @@ def system_info():
         rows.append(("Error", ap["error"], WARN))
     secs.append(("TESTER ACCESS POINT", rows))
     return secs, ap
+
+
+# --------------------------------------------------------------- connections (NetworkManager)
+# eth0 settings live in the tester's own profile, so the stock "Wired
+# connection 1" is never touched; it's made on the first APPLY
+ETH_CON = "pitester-eth"
+ADAPTER_DEFAULTS = {
+    "method": "auto",
+    "address": "",
+    "gateway": "",
+    "dns": "",
+    "link": "auto",
+    "mtu": "auto",
+}
+
+
+def nmcli(args, timeout=20):
+    """nmcli, retried through sudo if polkit says no (e.g. run over SSH
+    instead of from the desktop session)."""
+    rc, out, err = run(["nmcli"] + args, timeout=timeout)
+    if rc != 0 and re.search(r"not authorized|insufficient privileges|permission denied", err, re.I):
+        rc, out, err = run(["nmcli"] + args, timeout=timeout, sudo=True)
+    return rc, out, err
+
+
+def wifi_iface():
+    """The built-in Wi-Fi radio: any Wi-Fi device that isn't the AP adapter."""
+    ap = ap_iface()
+    rc, out, _ = run(["nmcli", "-t", "-f", "DEVICE,TYPE", "device"])
+    for line in out.splitlines():
+        dev, _, typ = line.partition(":")
+        if typ == "wifi" and dev != ap:
+            return dev
+    return None
+
+
+def _wifi_sort_key(n):
+    return (not n["in_use"], -n["signal"])
+
+
+def wifi_scan(iface):
+    """Visible networks, one entry per SSID (strongest AP wins), connected
+    one first. Hidden networks (no SSID) are left out. Returns (nets, error)."""
+    rc, out, err = run(["nmcli", "-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY,CHAN",
+                        "device", "wifi", "list", "ifname", iface, "--rescan", "yes"], timeout=25)
+    if rc != 0:
+        return None, (err or out).strip() or f"nmcli exit {rc}"
+    nets = {}
+    for line in out.splitlines():
+        parts = [p.replace("\\:", ":") for p in re.split(r"(?<!\\):", line)]
+        if len(parts) < 5 or not parts[1]:
+            continue
+        n = {
+            "in_use": parts[0] == "*",
+            "ssid": parts[1],
+            "signal": int(parts[2]) if parts[2].isdigit() else 0,
+            "security": "" if parts[3] in ("", "--") else parts[3],
+            "chan": parts[4],
+        }
+        old = nets.get(n["ssid"])
+        if not old or n["in_use"] or (not old["in_use"] and n["signal"] > old["signal"]):
+            nets[n["ssid"]] = n
+    return sorted(nets.values(), key=_wifi_sort_key), None
+
+
+def saved_wifi():
+    """Names of saved Wi-Fi profiles (nmcli names them after the SSID)."""
+    rc, out, _ = run(["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"])
+    names = set()
+    for line in out.splitlines():
+        parts = [p.replace("\\:", ":") for p in re.split(r"(?<!\\):", line)]
+        if len(parts) == 2 and parts[1] == "802-11-wireless":
+            names.add(parts[0])
+    return names
+
+
+def wifi_connect(iface, ssid, password=None):
+    """Join a network. A saved profile is reused (its password updated if a
+    new one was typed) rather than deleted - that keeps the home connection
+    as it was. Returns (ok, message)."""
+    if ssid in saved_wifi():
+        if password:
+            rc, out, err = nmcli(["connection", "modify", "id", ssid, "wifi-sec.psk", password])
+            if rc != 0:
+                return False, (err or out).strip()
+        rc, out, err = nmcli(["connection", "up", "id", ssid, "ifname", iface], timeout=45)
+    else:
+        args = ["device", "wifi", "connect", ssid, "ifname", iface]
+        if password:
+            args += ["password", password]
+        rc, out, err = nmcli(args, timeout=45)
+    return rc == 0, "connected" if rc == 0 else (err or out).strip() or f"nmcli exit {rc}"
+
+
+def wifi_disconnect(iface):
+    rc, out, err = nmcli(["device", "disconnect", iface])
+    return rc == 0, "disconnected" if rc == 0 else (err or out).strip()
+
+
+def clean_ipv4(field, text):
+    """Tidy a typed address / gateway / DNS entry. Returns (value, error).
+    An address with no /prefix gets /24."""
+    text = text.strip()
+    if not text:
+        return "", None
+    try:
+        if field == "address":
+            return str(ipaddress.IPv4Interface(text if "/" in text else text + "/24")), None
+        if field == "dns":
+            return ",".join(str(ipaddress.IPv4Address(x)) for x in re.split(r"[,\s]+", text) if x), None
+        return str(ipaddress.IPv4Address(text)), None
+    except ValueError as e:
+        return None, str(e)
+
+
+def adapter_connection(kind, iface):
+    """The profile the settings screen edits: pitester-eth for eth0, or
+    whichever network the Wi-Fi radio is connected to (None if none)."""
+    if kind == "eth":
+        return ETH_CON
+    rc, out, _ = run(["nmcli", "-g", "GENERAL.CONNECTION", "device", "show", iface])
+    return out.strip() if out.strip() not in ("", "--") else None
+
+
+def read_adapter(kind, iface):
+    """Returns (profile name, settings) in the ADAPTER_DEFAULTS shape. A
+    missing pitester-eth reads as the defaults, which is what eth0 does
+    without it (DHCP, auto-negotiate)."""
+    s = dict(ADAPTER_DEFAULTS)
+    con = adapter_connection(kind, iface)
+    if not con:
+        return None, s
+    eth = "802-3-ethernet"
+    mtu_key = (eth if kind == "eth" else "802-11-wireless") + ".mtu"
+    fields = ["ipv4.method", "ipv4.addresses", "ipv4.gateway", "ipv4.dns", mtu_key]
+    if kind == "eth":
+        fields += [eth + ".speed", eth + ".duplex"]
+    rc, out, _ = run(["nmcli", "-t", "-f", ",".join(fields), "connection", "show", "id", con])
+    if rc != 0:
+        return con, s
+    d = {}
+    for line in out.splitlines():
+        k, _, v = line.partition(":")
+        v = v.replace("\\:", ":").strip()
+        d[k] = "" if v == "--" else v
+    s["method"] = d.get("ipv4.method") or "auto"
+    s["address"] = d.get("ipv4.addresses", "").split(",")[0].strip()
+    s["gateway"] = d.get("ipv4.gateway", "")
+    s["dns"] = d.get("ipv4.dns", "")
+    s["mtu"] = "auto" if d.get(mtu_key, "") in ("", "0", "auto") else d[mtu_key]
+    speed = d.get(eth + ".speed", "")
+    if kind == "eth" and speed not in ("", "0"):
+        s["link"] = f"{speed}/{d.get(eth + '.duplex') or 'full'}"
+    return con, s
+
+
+def apply_adapter(kind, iface, s):
+    """Write settings into the profile and bring it up. Returns (ok, message)."""
+    con = adapter_connection(kind, iface)
+    if not con:
+        return False, "not connected to a Wi-Fi network"
+    if s["method"] == "manual" and not s["address"]:
+        return False, "STATIC needs an address"
+    eth = "802-3-ethernet"
+    if kind == "eth" and run(["nmcli", "connection", "show", "id", con])[0] != 0:
+        # priority 50 beats the stock profile, so this one comes up on every cable
+        rc, out, err = nmcli(["connection", "add", "type", "ethernet", "ifname", iface,
+                              "con-name", con, "autoconnect", "yes",
+                              "connection.autoconnect-priority", "50"])
+        if rc != 0:
+            return False, (err or out).strip()
+
+    static = s["method"] == "manual"
+    args = [
+        "connection", "modify", "id", con,
+        "ipv4.method", s["method"],
+        "ipv4.addresses", s["address"] if static else "",
+        "ipv4.gateway", s["gateway"] if static else "",
+        "ipv4.dns", s["dns"] if static else "",
+        (eth if kind == "eth" else "802-11-wireless") + ".mtu", "0" if s["mtu"] == "auto" else s["mtu"],
+    ]
+    if kind == "eth":
+        # auto-negotiation stays on even for a fixed speed: NM then advertises
+        # only that one mode, so the switch follows along instead of dropping
+        # to half duplex the way it does against a hard-forced port
+        speed, _, duplex = s["link"].partition("/")
+        args += [
+            eth + ".auto-negotiation", "yes",
+            eth + ".speed", "0" if s["link"] == "auto" else speed,
+            eth + ".duplex", "" if s["link"] == "auto" else duplex,
+        ]
+    rc, out, err = nmcli(args)
+    if rc != 0:
+        return False, (err or out).strip()
+    if kind == "eth" and not carrier(iface):
+        return True, "saved - takes effect when a cable is plugged in"
+    rc, out, err = nmcli(["connection", "up", "id", con, "ifname", iface], timeout=45)
+    return rc == 0, "applied" if rc == 0 else (err or out).strip()
 
 
 # --------------------------------------------------------------- SSDP / UPnP discovery

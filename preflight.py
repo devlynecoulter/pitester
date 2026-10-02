@@ -58,6 +58,7 @@ REQUIRED_MODULES = [
     "fcntl",
     "logging",
     "logging.handlers",
+    "ipaddress",
 ]
 
 REQUIRED_FILES = [
@@ -177,6 +178,9 @@ def _check_safe_functions(iface):
         ("ap_status", nc.ap_status),
         ("system_info", nc.system_info),
         ("lldp_neighbors", functools.partial(nc.lldp_neighbors, iface)),
+        ("wifi_iface", nc.wifi_iface),
+        ("saved_wifi", nc.saved_wifi),
+        ("read_adapter", functools.partial(nc.read_adapter, "eth", iface)),
     ]
     rows = []
     for label, fn in checks:

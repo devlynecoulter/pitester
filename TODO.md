@@ -38,7 +38,18 @@
       over by hand. Needs a GitHub login or deploy key on the Pi.
 - [ ] Make netcore take an interface argument instead of the global `IFACE`,
       so every test can run on eth0 OR wlan0.
-- [ ] On-screen touch keyboard in Tk (needed for Wi-Fi passwords, file names).
+- [x] On-screen touch keyboard in Tk (touch_keyboard in app.py: letters,
+      symbols, and a number pad for addresses).
+- [ ] CONNECTIONS submenu (built, untested on the Pi):
+  - [ ] WI-FI CONFIG: scan list on the built-in radio, tap to join, password
+        prompt, DISCONNECT. Hidden SSIDs not supported yet.
+  - [ ] ETH CONFIG / Wi-Fi SETTINGS: DHCP/static, address, gateway, DNS,
+        link speed (eth only), MTU, DEFAULTS + APPLY. eth0 uses its own
+        "pitester-eth" NM profile (made on first APPLY, priority 50).
+  - [ ] Confirm nmcli works from the desktop session without sudo; rerun
+        install.sh either way so the nmcli sudo fallback is in sudoers.
+  - [ ] Check fixed link speeds actually take on the Pi 4 NIC (NM advertises
+        only the chosen mode with auto-negotiation left on).
 - [ ] Captures/results can fill or wear out the SD card: size limits, and
       optional save to a USB stick.
 
