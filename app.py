@@ -289,9 +289,9 @@ class screen(tk.Frame):
     def on_done(self):
         pass
 
-    def _go_home(self):
-        """Shared BACK target: every screen except LOAD's viewer returns to home."""
-        self.app.show("home")
+    def _go_back(self):
+        """Shared BACK target: returns to the menu this screen lives under."""
+        self.app.show(self.app.PARENT.get(self.app.current, "home"))
 
 
 class report_screen(screen):
@@ -425,144 +425,94 @@ class report_screen(screen):
         )
 
 
-class home_screen(screen):
-    def __init__(self, parent, app):
+class menu_screen(screen):
+    """Full-screen grid of big buttons under the header bar.
+
+    `cells` is row-major; each entry is one of:
+      (text, cmd)   a normal button
+      (text, None)  a feature that isn't built yet: greyed out, tapping it
+                    just shows a "coming soon" toast
+      None          an empty cell (keeps the grid evenly sized)
+    BACK is supplied by the caller so the top-level menu can leave it out.
+    """
+
+    def __init__(self, parent, app, cells, cols):
         super().__init__(parent, app)
-
-        # ---- summary card: switch / port / vlan / ip from the last scan ----
-        card = tk.Frame(self, bg=PANEL)
-        card.pack(fill="x", padx=6, pady=(6, 4))
-        card.columnconfigure(1, weight=1)
-        card.columnconfigure(3, weight=1)
-        self.vals = {}
-        summary_fields = [
-            ("switch", "SWITCH"),
-            ("port", "PORT"),
-            ("vlan", "VLAN"),
-            ("ip", "IP"),
-        ]
-        for i, (key, label) in enumerate(summary_fields):
-            r, c = divmod(i, 2)
-            label_lbl = tk.Label(card, text=label, font=F_SMALL, fg=DIM, bg=PANEL)
-            label_lbl.grid(
-                row=r,
-                column=c * 2,
-                sticky="w",
-                padx=(8, 4),
-                pady=4,
-            )
-            v = tk.Label(
-                card,
-                text=nc.NA,
-                font=F_BOLD,
-                fg=FG,
-                bg=PANEL,
-                anchor="w",
-            )
-            v.grid(
-                row=r,
-                column=c * 2 + 1,
-                sticky="we",
-                pady=4,
-            )
-            self.vals[key] = v
-
-        # ---- one-line status text ("plug in a cable", "scanning...", etc) ----
-        self.state_lbl = tk.Label(
-            card,
-            text="Plug in a cable to start",
-            font=F_SMALL,
-            fg=DIM,
-            bg=PANEL,
-            anchor="w",
-        )
-        self.state_lbl.grid(
-            row=2,
-            column=0,
-            columnspan=4,
-            sticky="we",
-            padx=8,
-            pady=(0, 4),
-        )
-
-        # ---- main 3x2 action grid ----
         grid = tk.Frame(self, bg=BG)
-        grid.pack(fill="both", expand=True, padx=4)
-        buttons = [
-            ("SCAN", app.cmd_scan, ACCENT),
-            ("CABLE\nTEST", self._go_cable, PANEL2),
-            ("1000BASE-T\nTEST", self._go_gig, PANEL2),
-            ("BLINK\nPORT", self._go_blink, PANEL2),
-            ("SAVE", app.cmd_save, PANEL2),
-            ("LOAD", self._go_load, PANEL2),
-        ]
-        for i, (t, cmd, bg) in enumerate(buttons):
-            r, c = divmod(i, 3)
-            btn = mkbtn(
-                grid,
-                t,
-                cmd,
-                bg=bg,
-            )
-            btn.grid(
-                row=r,
-                column=c,
-                sticky="nsew",
-                padx=3,
-                pady=3,
-            )
-        grid.columnconfigure(0, weight=1, uniform="c")
-        grid.columnconfigure(1, weight=1, uniform="c")
-        grid.columnconfigure(2, weight=1, uniform="c")
-        grid.rowconfigure(0, weight=1, uniform="r")
-        grid.rowconfigure(1, weight=1, uniform="r")
+        grid.pack(fill="both", expand=True, padx=4, pady=4)
+        for i, cell in enumerate(cells):
+            r, c = divmod(i, cols)
+            if cell is None:
+                w = tk.Frame(grid, bg=BG)
+            elif cell[1] is None:
+                w = mkbtn(grid, cell[0] + "\n(soon)", functools.partial(self._soon, cell[0]),
+                          bg=PANEL)
+                w.config(fg=DIM, activebackground=PANEL, activeforeground=DIM)
+            else:
+                w = mkbtn(grid, cell[0], cell[1])
+            w.grid(row=r, column=c, sticky="nsew", padx=3, pady=3)
+        rows = (len(cells) + cols - 1) // cols
+        for c in range(cols):
+            grid.columnconfigure(c, weight=1, uniform="c")
+        for r in range(rows):
+            grid.rowconfigure(r, weight=1, uniform="r")
 
-        # ---- system menu entry point (reboot / power off / exit / AP toggle) ----
-        sys_btn = mkbtn(
-            self,
-            "SYSTEM",
-            self._go_system,
-            font=F_BOLD,
-        )
-        sys_btn.pack(
-            fill="x",
-            padx=7,
-            pady=(0, 6),
-            ipady=6,
-        )
+    def _soon(self, text):
+        self.app.toast(f"{text.replace(chr(10), ' ')}: coming soon", AMBER)
 
-    # ---- button targets (named instead of inline lambdas, so they show up
-    # by name in tracebacks and can be set as breakpoints) ----
-    def _go_cable(self):
-        self.app.show("cable")
 
-    def _go_gig(self):
-        self.app.show("gig")
+def build_menus(parent, app):
+    """The main menu and its four submenus, laid out to match the sketch:
+    each submenu sits in the same corner as its button on the main menu.
+    """
+    def go(name):
+        return functools.partial(app.show, name)
 
-    def _go_blink(self):
-        self.app.show("blink")
-
-    def _go_load(self):
-        self.app.show("load")
-
-    def _go_system(self):
-        self.app.show("system")
-
-    def refresh(self):
-        ident = self.app.ident
-        for k, lbl in self.vals.items():
-            t = str(ident.get(k) or nc.NA)
-            lbl.config(text=t if len(t) <= 20 else t[:19] + "...")
-        self.state_lbl.config(text=ident.get("state") or "")
-
-    def on_show(self):
-        self.refresh()
+    back = ("BACK", go("home"))
+    return {
+        "home": menu_screen(parent, app, [
+            ("CONNECTIONS", go("connections")),
+            ("TESTS", go("tests")),
+            ("SCANS", go("scans")),
+            ("LOGS", go("logs")),
+        ], cols=2),
+        "connections": menu_screen(parent, app, [
+            ("WI-FI\nCONFIG", None),
+            ("ETH\nCONFIG", None),
+            None,
+            None,
+            None,
+            back,
+        ], cols=3),
+        "tests": menu_screen(parent, app, [
+            ("BLINK\nPORT", go("blink")),
+            ("SPEED\nTEST", go("gig")),
+            ("RESET\nCONNECTION", None),
+            ("CABLE\nTEST", go("cable")),
+            None,
+            back,
+        ], cols=3),
+        "scans": menu_screen(parent, app, [
+            ("LLDP /\nSSDP SCAN", app.cmd_scan),
+            ("NETWORK\nSCAN", None),
+            ("VLAN /\nSUBNET", None),
+            None,
+            ("NETWORK\nMAP", None),
+            back,
+        ], cols=3),
+        "logs": menu_screen(parent, app, [
+            ("SAVE\nCURRENT", app.cmd_save),
+            ("EXPORT\nTO USB", None),
+            ("LOAD\nLOG", go("load")),
+            back,
+        ], cols=2),
+    }
 
 
 class scan_screen(report_screen):
     def __init__(self, parent, app):
         super().__init__(parent, app, "NETWORK SCAN")
-        self.add_btn("BACK", self._go_home)
+        self.add_btn("BACK", self._go_back)
         self.add_btn("RESCAN", app.cmd_scan, bg=ACCENT)
         self.add_btn("SAVE", app.cmd_save)
         self.set_sections([("SCAN", [("Status", "Plug in a cable or tap RESCAN", "")])])
@@ -585,7 +535,7 @@ class cable_screen(report_screen):
 
     def __init__(self, parent, app):
         super().__init__(parent, app, "CABLE TEST")
-        self.add_btn("BACK", self._go_home)
+        self.add_btn("BACK", self._go_back)
         self.run_btn = self.add_btn("RUN", app.cmd_cable, bg=ACCENT)
         self.set_sections(self.INTRO)
 
@@ -621,7 +571,7 @@ class gig_screen(report_screen):
     def __init__(self, parent, app):
         super().__init__(parent, app, "1000BASE-T TEST")
         self.duration, self.is_running = 30, False
-        self.add_btn("BACK", self._go_home)
+        self.add_btn("BACK", self._go_back)
         self.dur_btn = self.add_btn("30 s", self._cycle)
         self.run_btn = self.add_btn("RUN", self._run, bg=ACCENT)
         self.set_sections(self.INTRO)
@@ -680,7 +630,7 @@ class blink_screen(report_screen):
     def __init__(self, parent, app):
         super().__init__(parent, app, "BLINK PORT")
         self.mode, self.is_running, self.status = "traffic", False, "Idle"
-        self.add_btn("BACK", self._go_home)
+        self.add_btn("BACK", self._go_back)
         self.mode_btn = self.add_btn("MODE: TRAFFIC", self._cycle, font=F_BOLD)
         self.run_btn = self.add_btn("START", self._toggle, bg=ACCENT)
         self._draw()
@@ -751,7 +701,7 @@ class load_screen(screen):
             padx=3,
             pady=3,
         )
-        back_btn = mkbtn(bar, "BACK", self._go_home)
+        back_btn = mkbtn(bar, "BACK", self._go_back)
         back_btn.pack(
             fill="both",
             expand=True,
@@ -845,7 +795,7 @@ class system_screen(report_screen):
     def __init__(self, parent, app):
         super().__init__(parent, app, "SYSTEM")
         self.ap_mode = None
-        self.add_btn("BACK", self._go_home, font=F_BOLD)
+        self.add_btn("BACK", self._go_back, font=F_BOLD)
         self.add_btn("SELF TEST", self._go_selftest, font=F_BOLD)
         self.ap_btn = self.add_btn(
             "AP: ...",
@@ -983,6 +933,16 @@ class app(tk.Tk):
         "selftest_active": "selftest",
     }
     LINK_DISRUPTING = {"cable", "blink", "selftest_active"}
+    # where BACK goes from each screen; anything not listed goes to home
+    PARENT = {
+        "scan": "scans",
+        "cable": "tests",
+        "gig": "tests",
+        "blink": "tests",
+        "load": "logs",
+        "viewer": "load",
+        "selftest": "system",
+    }
 
     def __init__(self):
         super().__init__()
@@ -1020,9 +980,15 @@ class app(tk.Tk):
         self._build_statusbar()
         body = tk.Frame(self, bg=BG)
         body.pack(fill="both", expand=True)
-        self.screens = {}
+        self.screens = build_menus(body, self)
+        for s in self.screens.values():
+            s.place(
+                relx=0,
+                rely=0,
+                relwidth=1,
+                relheight=1,
+            )
         screen_classes = [
-            ("home", home_screen),
             ("scan", scan_screen),
             ("cable", cable_screen),
             ("gig", gig_screen),
@@ -1052,10 +1018,9 @@ class app(tk.Tk):
         )
         self.show("home")
 
-        # ---- background plumbing: link monitor thread, queue pump, clock ----
+        # ---- background plumbing: link monitor thread, queue pump ----
         threading.Thread(target=self._monitor, daemon=True).start()
         self.after(100, self._pump)
-        self._tick_clock()
 
     def _ignore_close(self):
         """Window manager's close button does nothing; use SYSTEM > EXIT instead."""
@@ -1063,9 +1028,22 @@ class app(tk.Tk):
 
     # ---------- chrome
     def _build_statusbar(self):
-        bar = tk.Frame(self, bg=PANEL, height=34)
+        """Header on every screen: the current connection (link, IP, and the
+        switch/port/VLAN from the last scan) on the left, gear -> SYSTEM on
+        the right.
+        """
+        bar = tk.Frame(self, bg=PANEL, height=44)
         bar.pack(fill="x", side="top")
         bar.pack_propagate(False)
+        gear_btn = mkbtn(
+            bar,
+            "\u2699",
+            self._go_system,
+            bg=PANEL,
+            font=("DejaVu Sans", 22),
+        )
+        gear_btn.config(width=2)
+        gear_btn.pack(side="right", fill="y")
         self.sb_link = tk.Label(
             bar,
             text="...",
@@ -1083,15 +1061,15 @@ class app(tk.Tk):
             fg=FG,
         )
         self.sb_ip.pack(side="left")
-        self.sb_clock = tk.Label(
+        self.sb_conn = tk.Label(
             bar,
             text="",
-            font=F_BOLD,
+            font=F_SMALL,
             bg=PANEL,
-            fg=FG,
+            fg=DIM,
             padx=8,
+            anchor="w",
         )
-        self.sb_clock.pack(side="right")
         self.sb_ap = tk.Label(
             bar,
             text="AP",
@@ -1101,6 +1079,8 @@ class app(tk.Tk):
             padx=6,
         )
         self.sb_ap.pack(side="right")
+        # packed last so it only takes what the fixed-width labels leave over
+        self.sb_conn.pack(side="left", fill="x", expand=True)
 
     def _update_status(self, s):
         if not s["up"]:
@@ -1116,9 +1096,19 @@ class app(tk.Tk):
         self.sb_ap.config(text="AP UP" if ap == "up" else "AP DOWN" if ap else "AP ?",
                           fg=GREEN if ap == "up" else RED if ap else DIM)
 
-    def _tick_clock(self):
-        self.sb_clock.config(text=time.strftime("%H:%M"))
-        self.after(5000, self._tick_clock)
+    def _update_ident(self):
+        """Switch / port / VLAN from the last scan, shown in the header."""
+        ident = self.ident
+        parts = [
+            ident.get("switch"),
+            ident.get("port"),
+            f"VLAN {ident['vlan']}" if ident.get("vlan") not in (None, nc.NA) else None,
+        ]
+        t = "  ".join(str(p) for p in parts if p and p != nc.NA)
+        self.sb_conn.config(text=t if len(t) <= 34 else t[:33] + "...")
+
+    def _go_system(self):
+        self.show("system")
 
     def show(self, name):
         self.current = name
@@ -1231,7 +1221,7 @@ class app(tk.Tk):
             if kind == "scan":
                 self.results["scan"] = payload["sections"]
                 self.ident = payload["ident"]
-                self.screens["home"].refresh()
+                self._update_ident()
             self.screens[self.TASK_SCREEN[kind]].on_msg(payload)
 
     def _on_carrier(self, up):
@@ -1241,7 +1231,7 @@ class app(tk.Tk):
             self.results.pop("cable", None)
             self.results.pop("gig", None)
             self.start_scan(fresh=True)
-            if self.current == "home":
+            if self.current in ("home", "scans"):
                 self.show("scan")
             self.toast("Cable connected - scanning")
         else:
