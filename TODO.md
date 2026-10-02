@@ -13,13 +13,31 @@
   along the way (non-UTF8 tool output, an unbounded receive loop).
 - Fixed report-screen flicker during live scans (was rebuilding every
   widget on every 1s tick even when nothing changed).
-- Repo is live at github.com/devlynecoulter/pitester (private).
+- Repo is live at github.com/devlynecoulter/pitester (public).
+- UI overhaul (on unstable-sts): home is now CONNECTIONS | TESTS | SCANS |
+  LOGS, each opening a submenu; unbuilt features show greyed out with
+  "(soon)". BACK returns to the parent menu, SYSTEM moved to a gear icon in
+  the status bar, switch/port/VLAN shown in the status bar, clock removed.
 
 ## 0. Groundwork (do first, the rest depends on it)
+- [ ] Shake out the UI overhaul. A rewrite this size is guaranteed to have
+      a pile of small issues that only show up on the real 640x480 touch
+      screen. Run through every menu and screen on the Pi and log what's
+      off here, e.g.:
+  - [ ] Button text fits at 640x480 (3-column submenus, long labels like
+        "RESET\nCONNECTION")
+  - [ ] Status bar: switch/port/VLAN text truncates cleanly, gear is easy
+        to hit with a finger
+  - [ ] BACK lands on the right menu from every screen (incl. after a
+        cable plug-in auto-jumps to the scan screen)
+  - [ ] Scan status ("scanning...", "waiting for DHCP") is visible enough
+        now that the home card is gone
+  - [ ] Merge unstable-sts into master once it's solid
+- [ ] Put git on the Pi: clone the repo there so updates are a `git pull`
+      (and branch switches are a `git checkout`) instead of copying files
+      over by hand. Needs a GitHub login or deploy key on the Pi.
 - [ ] Make netcore take an interface argument instead of the global `IFACE`,
       so every test can run on eth0 OR wlan0.
-- [ ] Rearrange the UI into submenus. Proposed home screen:
-      WIRED | WI-FI | DISCOVERY | RADIO (BT / Zigbee) | RESULTS | SYSTEM
 - [ ] On-screen touch keyboard in Tk (needed for Wi-Fi passwords, file names).
 - [ ] Captures/results can fill or wear out the SD card: size limits, and
       optional save to a USB stick.

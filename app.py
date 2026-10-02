@@ -32,8 +32,11 @@ EXIT_SHUTDOWN, EXIT_REBOOT, EXIT_ALREADY_RUNNING, EXIT_CRASH, EXIT_DESKTOP = 0, 
 WINDOWED = os.environ.get("PITESTER_WINDOWED") == "1"
 log = logging.getLogger("pitester")
 
+# near-black, dark grey, slate grey
 BG, PANEL, PANEL2 = "#0f1419", "#1b232c", "#26323e"
+# off-white, light grey, blue
 FG, DIM, ACCENT = "#e6edf3", "#8b98a5", "#2f81f7"
+# green, red, amber/orange
 GREEN, RED, AMBER = "#2ea043", "#da3633", "#c98a14"
 STATUS_COLOR = {nc.PASS: GREEN, nc.FAIL: RED, nc.WARN: AMBER}
 VERDICT = {
@@ -818,7 +821,7 @@ class system_screen(report_screen):
         self.add_btn(
             "POWER OFF",
             self._power_off,
-            bg="#5a1f1f",
+            bg="#5a1f1f",  # dark red / maroon
             confirm=True,
             font=F_BOLD,
         )
@@ -877,7 +880,7 @@ class self_test_screen(report_screen):
         super().__init__(parent, app, "SELF TEST")
         self.add_btn("BACK", self._go_system)
         self.add_btn("SAFE\nCHECKS", self._run_safe, bg=ACCENT)
-        self.add_btn("ACTIVE\nTESTS", self._run_active, bg="#5a1f1f", confirm=True)
+        self.add_btn("ACTIVE\nTESTS", self._run_active, bg="#5a1f1f", confirm=True)  # dark red / maroon
         self.set_sections(self.INTRO)
 
     def _go_system(self):
