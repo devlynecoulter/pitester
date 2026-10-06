@@ -75,6 +75,7 @@ REQUIRED_BINARIES = [
     "ip",
     "nmcli",
     "lldpcli",
+    "arp-scan",
     "systemctl",
     "iw",
     "ping",

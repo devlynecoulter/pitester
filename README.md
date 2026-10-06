@@ -7,18 +7,28 @@ Files (copy the whole folder to /home/<you>/pitester):
 - preflight.py  self-diagnostic checks (see "Self test" below)
 - launch.sh     starts the UI; exit 0 = power off, 10 = reboot, other = crash -> reboot
 - pitester-ap   hotspot isolate/open/status helper (installed to /usr/local/sbin)
-- install.sh    one-time setup
+- install.sh    setup and updates (see "install.sh modes" below)
 
 Install:
     cd ~/pitester
     sed -i 's/\r$//' install.sh      # only needed if WinSCP added Windows line endings
-    sudo bash install.sh
+    sudo bash install.sh --force     # first install
     sudo reboot
+
+install.sh modes:
+    sudo bash install.sh            check only: reports what's installed /
+                                    missing, changes nothing
+    sudo bash install.sh --update   fixes only what's missing or out of date;
+                                    an existing hotspot is left alone (use
+                                    this after pulling changes)
+    sudo bash install.sh --force    fresh install: redoes every step and
+                                    rebuilds the hotspot (password resets to
+                                    the default unless AP_PASS is given)
 
 Hotspot: SSID "scanner", Pi at 192.168.4.1 (SSH/SFTP).
 Password defaults to the Pi's eth0 MAC, lowercase, no colons (e.g. dca632a1b2c3).
 It is shown on the System screen and printed at the end of install.
-Custom password:  sudo AP_PASS=yourpassword bash install.sh
+Custom password:  sudo AP_PASS=yourpassword bash install.sh --update
 Built-in Wi-Fi client connection is left untouched.
 
 Maintenance: `touch ~/pitester/MAINTENANCE` -> exiting the app (e.g. POWER OFF,

@@ -18,6 +18,11 @@
   LOGS, each opening a submenu; unbuilt features show greyed out with
   "(soon)". BACK returns to the parent menu, SYSTEM moved to a gear icon in
   the status bar, switch/port/VLAN shown in the status bar, clock removed.
+- ARP sweep (on unstable-sts): SCANS > NETWORK SCAN lists every device on
+  the subnet (IP, MAC, vendor), flags IP conflicts. See item 1.
+- install.sh is safe to rerun: no flag = check only (reports what's
+  installed/missing), --update = fix only what's missing (hotspot left
+  alone), --force = fresh install.
 
 ## 0. Groundwork (do first, the rest depends on it)
 - [ ] Shake out the UI overhaul. A rewrite this size is guaranteed to have
@@ -32,6 +37,9 @@
         cable plug-in auto-jumps to the scan screen)
   - [ ] Scan status ("scanning...", "waiting for DHCP") is visible enough
         now that the home card is gone
+  - [ ] ARP SWEEP screen: device rows readable, STOP works, the
+        SWEEP ALL /nn prompt on a big subnet
+  - [ ] First real run of install.sh's check / --update / --force modes
   - [ ] Merge unstable-sts into master once it's solid
 - [ ] Put git on the Pi: clone the repo there so updates are a `git pull`
       (and branch switches are a `git checkout`) instead of copying files
@@ -47,15 +55,20 @@
         link speed (eth only), MTU, DEFAULTS + APPLY. eth0 uses its own
         "pitester-eth" NM profile (made on first APPLY, priority 50).
   - [ ] Confirm nmcli works from the desktop session without sudo; rerun
-        install.sh either way so the nmcli sudo fallback is in sudoers.
+        install.sh --update either way so the nmcli sudo fallback is in sudoers.
   - [ ] Check fixed link speeds actually take on the Pi 4 NIC (NM advertises
         only the chosen mode with auto-negotiation left on).
 - [ ] Captures/results can fill or wear out the SD card: size limits, and
       optional save to a USB stick.
 
 ## 1. Aggressive device discovery (TOP PRIORITY)
-- [ ] ARP sweep of the whole subnet (arp-scan, needs root via sudoers).
+- [x] ARP sweep of the whole subnet (arp-scan, needs root via sudoers).
       Cap at /22 (1024 addresses); ask before sweeping anything bigger.
+      Built as SCANS > NETWORK SCAN (arp_sweep in netcore.py, sweep_screen
+      in app.py), untested on the Pi - run install.sh --update for arp-scan + its
+      sudo rule. Flags an IP answering from two MACs as a conflict.
+- [ ] Wire discover_ssdp() into the LLDP / SSDP SCAN button (the button
+      only runs the LLDP scan right now).
 - [ ] TCP port probe on hosts that answered only. Editable port list, e.g.
       22, 23, 80, 443, 554 (RTSP cameras), 8080, 1400 (Sonos),
       8008/8009 (Chromecast) + AV/control ports from the job's gear.

@@ -7,8 +7,8 @@ import time
 from pathlib import Path
 
 RESULTS_DIR = Path(os.environ.get("PITESTER_RESULTS", str(Path.home() / "scan_results")))
-ORDER = ["scan", "cable", "gig"]  # fixed section order within a saved file, regardless
-                                  # of the order the tests happened to run in
+ORDER = ["scan", "sweep", "cable", "gig"]  # fixed section order within a saved file, regardless
+                                           # of the order the tests happened to run in
 
 
 def _sanitize(s):
@@ -19,7 +19,7 @@ def _sanitize(s):
 
 
 def save(ident, results):
-    """ident: {'switch','port'}; results: {'scan'|'cable'|'gig': sections}."""
+    """ident: {'switch','port'}; results: {'scan'|'sweep'|'cable'|'gig': sections}."""
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     ts = time.strftime("%y%m%d%H%M%S")
     sw, port = ident.get("switch") or "NA", ident.get("port") or "NA"

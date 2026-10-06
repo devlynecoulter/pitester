@@ -605,7 +605,7 @@ def build_menus(parent, app):
         ], cols=3),
         "scans": menu_screen(parent, app, [
             ("LLDP /\nSSDP SCAN", app.cmd_scan),
-            ("NETWORK\nSCAN", None),
+            ("NETWORK\nSCAN", go("sweep")),
             ("VLAN /\nSUBNET", None),
             None,
             ("NETWORK\nMAP", None),
@@ -635,6 +635,60 @@ class scan_screen(report_screen):
     def on_done(self):
         self.info_lbl.config(text=f"{self.app.ident.get('state', '')}  "
                                   f"({time.strftime('%H:%M:%S')})")
+
+
+class sweep_screen(report_screen):
+    INTRO = [("ARP SWEEP", [
+        ("Finds", "Every device on this subnet: IP, MAC and vendor. Anything that talks "
+                  "on the network has to answer ARP, even gear that ignores ping.", ""),
+        ("Limit", "Sweeps up to a /22 (1024 addresses). Bigger subnets ask first.", ""),
+        ("Note", "Only sweep networks you're authorised to service.", "")])]
+
+    def __init__(self, parent, app):
+        super().__init__(parent, app, "ARP SWEEP")
+        self.is_running, self.big = False, None
+        self.add_btn("BACK", self._go_back)
+        self.run_btn = self.add_btn("SWEEP", self._run, bg=ACCENT)
+        self.add_btn("SAVE", app.cmd_save)
+        self.set_sections(self.INTRO)
+
+    def on_show(self):
+        if not self.is_running:
+            res = self.app.results.get("sweep")
+            self.set_sections(res or self.INTRO, reset=True)
+            self.set_banner(VERDICT[nc.worst(res)] if res else "", nc.worst(res) if res else "")
+
+    def _run(self):
+        if self.is_running:
+            self.app.stop_task("sweep")
+            return
+
+        if self.app.busy:
+            self.app.toast(f"Busy: {self.app.busy}", AMBER)
+            return
+
+        self.is_running = True
+        self.run_btn.config(text="STOP", bg=RED)
+        self.set_banner("SWEEPING...")
+        self.app.cmd_sweep(allow_big=self.big is not None)
+        self.big = None
+
+    def on_msg(self, kw):
+        self.set_sections(kw["sections"])
+        if kw.get("big"):
+            self.big = kw["big"]
+        if kw.get("final"):
+            self.app.results["sweep"] = kw["sections"]
+            w = nc.worst(kw["sections"])
+            self.set_banner(VERDICT[w], w)
+
+    def on_done(self):
+        self.is_running = False
+        if self.big:
+            self.run_btn.config(text="SWEEP ALL\n/" + self.big.split("/")[1], bg=AMBER)
+        else:
+            self.run_btn.config(text="SWEEP", bg=ACCENT)
+        self.info_lbl.config(text=time.strftime("%H:%M:%S"))
 
 
 class cable_screen(report_screen):
@@ -1318,6 +1372,7 @@ class self_test_screen(report_screen):
 class app(tk.Tk):
     TASK_SCREEN = {
         "scan": "scan",
+        "sweep": "sweep",
         "cable": "cable",
         "gig": "gig",
         "blink": "blink",
@@ -1332,6 +1387,7 @@ class app(tk.Tk):
     # where BACK goes from each screen; anything not listed goes to home
     PARENT = {
         "scan": "scans",
+        "sweep": "scans",
         "cable": "tests",
         "gig": "tests",
         "blink": "tests",
@@ -1389,6 +1445,7 @@ class app(tk.Tk):
             )
         screen_classes = [
             ("scan", scan_screen),
+            ("sweep", sweep_screen),
             ("cable", cable_screen),
             ("gig", gig_screen),
             ("blink", blink_screen),
@@ -1644,6 +1701,7 @@ class app(tk.Tk):
         if up:
             self.results.pop("cable", None)
             self.results.pop("gig", None)
+            self.results.pop("sweep", None)
             self.start_scan(fresh=True)
             if self.current in ("home", "scans"):
                 self.show("scan")
@@ -1671,6 +1729,12 @@ class app(tk.Tk):
 
         self.start_scan(fresh=False)
         self.show("scan")
+
+    def cmd_sweep(self, allow_big=False):
+        def fn(emit, stop):
+            secs = nc.arp_sweep(emit, stop, allow_big=allow_big)
+            emit(sections=secs, final=True)
+        self.run_task("sweep", fn, exclusive=True)
 
     def cmd_cable(self):
         if self.busy:

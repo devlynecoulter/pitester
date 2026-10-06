@@ -1444,3 +1444,114 @@ def discover_ssdp(emit, stop, iface=IFACE, timeout=4, listen=0):
     sections = ssdp_sections(devices)
     emit(sections=sections)
     return sections
+
+
+# --------------------------------------------------------------- ARP sweep (arp-scan)
+# Every host on the subnet has to answer ARP to talk at all, so this finds
+# gear that ignores ping, LLDP and SSDP. arp-scan needs raw sockets, so it
+# runs through sudo (rule added by install.sh).
+MAX_SWEEP_PREFIX = 22  # /22 = 1024 addresses; anything bigger needs a second tap
+
+
+def _sweep_sections(net, devices, own, gw, note=None, status=""):
+    head = [("Subnet", f"{net} ({net.num_addresses} addresses)" if net else NA, "")]
+    if note:
+        head.append(("Status", note, status))
+    rows = []
+    if own:
+        rows.append((own["ip"], f"{own['mac'] or NA}\nThis tester", ""))
+    for ip in sorted(devices, key=_ip_sort_key):
+        d = devices[ip]
+        macs = sorted(d["macs"])
+        text = f"{macs[0]}\n{d['vendor'] or 'unknown vendor'}"
+        st = ""
+        if ip == gw:
+            text += " (gateway)"
+        if len(macs) > 1:
+            text += f"\nIP CONFLICT - also answered from {', '.join(macs[1:])}"
+            st = WARN
+        rows.append((ip, text, st))
+    return [("ARP SWEEP", head), (f"DEVICES ({len(devices)})", rows)]
+
+
+def _kill_on_stop(proc, stop, finished):
+    while not finished.is_set():
+        if stop.wait(0.5):
+            proc.kill()
+            return
+
+
+def arp_sweep(emit, stop, iface=IFACE, allow_big=False):
+    """emit(sections=...) as hosts answer. A subnet bigger than /22 isn't
+    swept unless allow_big - instead it emits big=<subnet> so the UI can ask.
+    Returns final sections."""
+    ip = ip_info(iface)
+    v4 = [a for a in ip.get("ipv4") or [] if not a.startswith("169.254.")]
+    if not v4:
+        secs = _sweep_sections(None, {}, None, None,
+                               f"No IPv4 address on {iface} - plug in and wait for DHCP", FAIL)
+        emit(sections=secs)
+        return secs
+
+    me = ipaddress.IPv4Interface(v4[0])
+    net = me.network
+    own = {"ip": str(me.ip), "mac": ip.get("mac")}
+    gw = ip.get("gateway")
+    devices = {}
+    if net.prefixlen < MAX_SWEEP_PREFIX and not allow_big:
+        secs = _sweep_sections(net, devices, own, gw,
+                               f"Bigger than /{MAX_SWEEP_PREFIX} - tap SWEEP ALL to sweep "
+                               f"anyway (slow, and noisy on a big network)", WARN)
+        emit(sections=secs, big=str(net))
+        return secs
+
+    note = f"sweeping {net.num_addresses} addresses on {iface}..."
+    emit(sections=_sweep_sections(net, devices, own, gw, note))
+    cmd = ["sudo", "-n", "arp-scan", "--interface", iface, "--plain", "--retry", "2", str(net)]
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, errors="replace")
+    except OSError as e:
+        secs = _sweep_sections(net, devices, own, gw, f"Could not start arp-scan: {e}", FAIL)
+        emit(sections=secs)
+        return secs
+
+    finished = threading.Event()
+    threading.Thread(target=_kill_on_stop, args=(proc, stop, finished), daemon=True).start()
+    last_emit = 0.0
+    for line in proc.stdout:
+        # --plain lines are "IP<tab>MAC<tab>vendor"; a host that answers twice
+        # gets a second line with "(DUP: n)" on the end
+        parts = line.rstrip("\n").split("\t")
+        if len(parts) < 2:
+            continue
+        host, mac = parts[0], parts[1].lower()
+        name = re.sub(r"\s*\(DUP: \d+\)\s*$", "", parts[2] if len(parts) > 2 else "").strip()
+        if name in ("", "(Unknown)") or name.startswith("(Unknown:"):
+            name = vendor(mac)
+        d = devices.setdefault(host, {"macs": set(), "vendor": None})
+        d["macs"].add(mac)
+        d["vendor"] = d["vendor"] or name
+        if time.time() - last_emit > 0.5:  # a burst of replies -> one redraw
+            emit(sections=_sweep_sections(net, devices, own, gw, f"{note} {len(devices)} found"))
+            last_emit = time.time()
+    err = proc.stderr.read()
+    rc = proc.wait()
+    finished.set()
+
+    # one cohesive decision (how the sweep ended), left as a single if/elif chain
+    if stop.is_set():
+        note, st = f"Stopped - {len(devices)} found before stopping", WARN
+    elif "password is required" in err:
+        note, st = "sudo rule missing - rerun install.sh", FAIL
+    elif "command not found" in err:
+        note, st = "arp-scan not installed - rerun install.sh", FAIL
+    elif rc != 0:
+        note, st = f"arp-scan exit {rc}: {err.strip() or 'no error text'}", FAIL
+    elif not devices:
+        note, st = "Nothing answered (isolated port, or nothing else on this subnet)", WARN
+    else:
+        note, st = f"Done - {len(devices)} device(s) answered", PASS
+    secs = _sweep_sections(net, devices, own, gw, note, st)
+    emit(sections=secs)
+    return secs
