@@ -79,6 +79,15 @@ for p in "${PKGS[@]}"; do
 done
 if [ ${#MISSING[@]} -gt 0 ]; then need "not installed: ${MISSING[*]}"; else fine "all packages installed"; fi
 if redo; then
+    # apt can't install offline, and a failed install would stop this script
+    # halfway (set -e) - so check the internet first and stop cleanly instead.
+    # deb.debian.org is where Pi OS gets its packages; pinging it by name
+    # tests DNS as well as the connection
+    if ! ping -c 2 -W 3 deb.debian.org >/dev/null 2>&1; then
+        die "No internet (can't ping deb.debian.org) - needed to install: ${MISSING[*]:-${PKGS[*]}}
+    Connect eth0 or the built-in Wi-Fi to a network with internet, then run this again.
+    No system changes made yet."
+    fi
     apt-get update
     if [ "$FORCE" = 1 ]; then INSTALL=("${PKGS[@]}"); else INSTALL=("${MISSING[@]}"); fi
     DEBIAN_FRONTEND=noninteractive apt-get install -y "${INSTALL[@]}"

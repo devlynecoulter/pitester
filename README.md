@@ -25,6 +25,11 @@ install.sh modes:
                                     rebuilds the hotspot (password resets to
                                     the default unless AP_PASS is given)
 
+Installing packages needs internet. Before touching apt, --update / --force
+ping deb.debian.org and stop with an error if it doesn't answer, so an
+offline Pi never ends up half-installed. Check mode, and --update when every
+package is already installed, work fine offline.
+
 Hotspot: SSID "scanner", Pi at 192.168.4.1 (SSH/SFTP).
 Password defaults to the Pi's eth0 MAC, lowercase, no colons (e.g. dca632a1b2c3).
 It is shown on the System screen and printed at the end of install.
